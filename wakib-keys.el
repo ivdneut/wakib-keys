@@ -376,7 +376,7 @@ Then add C-d and C-e to KEYMAP"
     ("M-n" . beginning-of-buffer)
     ("M-N" . end-of-buffer)
     ("C-n" . wakib-new-empty-buffer)
-    ("C-o" . find-file)
+    ("C-o" . ido-find-file-other-frame)
     ("C-S-o" . revert-buffer)
     ("C-w" . kill-this-buffer)
     ("C-q" . save-buffers-kill-terminal)
