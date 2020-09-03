@@ -187,6 +187,44 @@ Optional argument PREFIX adds prefix to command."
 	    (setcdr menu-item-list menu-item-copy)))))))
 
 
+(defun wakib-find-overlays-specifying (prop)
+  "Find property among overlays at point"
+            (let ((overlays (overlays-at (point)))
+                  found)
+              (while overlays
+                (let ((overlay (car overlays)))
+                  (if (overlay-get overlay prop)
+                      (setq found (cons overlay found))))
+                (setq overlays (cdr overlays)))
+              found))
+
+
+(defun wakib--replace-in-region (regex rep start-point end-point)
+  "Go through the output of describe bindings and replace C-c and C-x with C-d and C-e"
+  (save-excursion
+    (goto-char start-point)
+    (while (re-search-forward regex end-point t)
+      (replace-match rep))))
+
+(defun wakib--describe-bindings-advice (orig-fun buffer &optional prefix menus)
+  "Advice for describe-buffer-bindings to correctly show C-d and C-e bindings.
+Does not give the correct result if you explicitly search for C-c or C-x."
+  (let ((start-point (point)))
+    (cond ((not prefix)
+	   ;; Without prefix must change C-c and C-x
+	   (apply orig-fun buffer prefix menus)
+	   (wakib--replace-in-region "^C-c " "C-d " start-point (point))
+	   (wakib--replace-in-region "^C-x " "C-e " start-point (point)))
+	  ;; Explicit search for C-d won't work if buffer passed isn't current buffer
+	  ((and (not (eq buffer (current-buffer)))(string-match-p "^C-d" (key-description prefix)))
+	   (apply orig-fun buffer
+		  (kbd (replace-regexp-in-string "^C-d" "C-c" (key-description prefix))) menus)
+	   (wakib--replace-in-region  "^C-c " "C-d " start-point (point)))
+	  (t
+	   (apply orig-fun buffer prefix menus)))))
+
+
+    
 ;; Commands
 
 (defun wakib-previous (&optional arg)
@@ -197,7 +235,8 @@ ARG used as repeat function for interactive"
   (cond ((eq last-command 'yank)
 	 (yank-pop (- arg)))
 	((use-region-p)
-	 (exchange-point-and-mark))))
+	 (exchange-point-and-mark))
+	(t (wakib-previous-more))))
 
 (defun wakib-next (&optional arg)
   "Perform context aware Next function.
@@ -206,7 +245,16 @@ ARG used as repeat for interactive function."
   (cond ((eq last-command 'yank)
 	 (yank-pop arg))
 	((use-region-p)
-	 (exchange-point-and-mark))))
+	 (exchange-point-and-mark))
+	(t (wakib-next-more))))
+
+(defun wakib-previous-more (&optional arg)
+  "Used to add functionality to wakib-previous"
+  (interactive "p"))
+
+(defun wakib-next-more (&optional arg)
+  "Used to add fucntionality to wakib-next"
+  (interactive "p"))
 
 
 
@@ -301,14 +349,19 @@ It returns the buffer."
     (setq buffer-offer-save t)
     buffer))
 
-(defun wakib-insert-newline-before ()
+(defun wakib-insert-line-before ()
   "Insert a newline and indent before current line."
   (interactive)
   (move-beginning-of-line 1)
   (newline-and-indent)
   (forward-line -1)
-  (indent-for-tab-command))
+  (indent-according-to-mode))
 
+(defun wakib-insert-line-after ()
+  "Insert a newline and indent before current line."
+  (interactive)
+  (move-end-of-line 1)
+  (newline-and-indent))
 
 (defun wakib-beginning-of-line-or-block ()
   "Move cursor to beginning of line or previous paragraph."
@@ -357,7 +410,7 @@ Then add C-d and C-e to KEYMAP"
   (define-key keymap (kbd "C-d") (wakib-dynamic-binding "C-c")))
 
 (defvar wakib-keylist
-  '(("M-j" . left-char)
+  `(("M-j" . left-char)
     ("M-l" . right-char)
     ("M-i" . previous-line)
     ("M-k" . next-line)
@@ -365,8 +418,8 @@ Then add C-d and C-e to KEYMAP"
     ("M-o" . forward-word)
     ("M-;" . wakib-next)
     ("M-:" . wakib-previous)
-    ("M-U" . beginning-of-line)
-    ("M-O" . end-of-line)
+    ("M-U" . move-beginning-of-line)
+    ("M-O" . move-end-of-line)
     ("M-J" . backward-paragraph)
     ("M-L" . forward-paragraph)
     ("M-," . backward-sexp)
@@ -378,8 +431,8 @@ Then add C-d and C-e to KEYMAP"
     ("C-n" . wakib-new-empty-buffer)
     ("C-o" . ido-find-file-other-frame)
     ("C-S-o" . revert-buffer)
-    ;;("C-w" . kill-this-buffer)
-    ("C-w" . save-buffers-kill-terminal)
+    ("C-w" . kill-buffer-delete-frame)
+    ("C-q" . save-buffers-kill-terminal)
     ("C-<next>" . next-buffer)
     ("C-<prior>" . previous-buffer)
     ("C-c" . kill-ring-save)
@@ -391,8 +444,9 @@ Then add C-d and C-e to KEYMAP"
     ("C-r" . query-replace)
     ("C-S-r" . query-replace-regexp)
     ("C-s" . save-buffer)
+    ("C-S-s" . write-file)
     ("C-p" . print-buffer)
-    ("C-a" . wakib-select-line-block-all)
+    ("C-a" . mark-whole-buffer)
     ("C-+" . text-scale-increase)
     ("C-=" . text-scale-increase)
     ("C--" . text-scale-decrease)
@@ -414,9 +468,12 @@ Then add C-d and C-e to KEYMAP"
     ("M-a" . wakib-select-line-block-all)
     ("M-s" . set-mark-command)
     ("M-S-s" . set-rectangular-region-anchor)
-    ("S-RET" . wakib-insert-newline-before)
+    ("<C-return>" . wakib-insert-line-after)
+    ("<C-S-return>" . wakib-insert-line-before)
     ("C-b" . switch-to-buffer)
     ("M-X" . pp-eval-expression)
+    (,(concat "<C-" (symbol-name mouse-wheel-down-event)  ">") . text-scale-increase)
+    (,(concat "<C-" (symbol-name mouse-wheel-up-event)  ">") . text-scale-decrease)
     ("<escape>" . keyboard-quit)) ;; should quit minibuffer
   "List of all wakib mode keybindings.")
 
@@ -425,6 +482,15 @@ Then add C-d and C-e to KEYMAP"
 (add-to-list 'emulation-mode-map-alists
 	     `((wakib-keys . ,wakib-keys-overriding-map)))
 
+
+(defun wakib--setup ()
+  "Runs after minor mode change to setup minor mode"
+  (if wakib-keys
+      (progn
+	(advice-add 'substitute-command-keys :around #'wakib-substitute-command-keys)
+	(advice-add 'describe-buffer-bindings :around #'wakib--describe-bindings-advice))
+    (advice-remove 'substitute-command-keys #'wakib-substitute-command-keys)
+    (advice-remove 'describe-buffer-bindings #'wakib--describe-bindings-advice)))
 
 ;;;###autoload
 (define-minor-mode wakib-keys
@@ -439,7 +505,8 @@ Note that only the first prefix is changed. So C-c C-c becomes C-d C-c."
   :init-value nil
   :keymap wakib-keys-map
   :require 'wakib-keys
-  :global t)
+  :global t
+  (wakib--setup))
 
 (provide 'wakib-keys)
 
